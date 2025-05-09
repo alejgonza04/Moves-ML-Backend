@@ -1,4 +1,3 @@
-# app.py  (your Flask wrapper)
 import os
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify

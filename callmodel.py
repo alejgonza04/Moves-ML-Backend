@@ -1,18 +1,11 @@
-# callmodel.py
-
-import pandas as pd
 import numpy as np
 import os
-import random
 import time 
 import joblib
-import lightgbm as lgb
 import requests
 from functools import lru_cache                             # ADDED
 from concurrent.futures import ThreadPoolExecutor, as_completed  # ADDED
-from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from sklearn.metrics.pairwise import cosine_similarity
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
