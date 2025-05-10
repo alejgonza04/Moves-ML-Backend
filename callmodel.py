@@ -34,7 +34,7 @@ mood_type_map = {
 
 _, cv, _ = joblib.load(os.path.join(os.path.dirname(__file__), "recommender_model.joblib"))
 
-# ADDED: in-memory cache for TF-IDF transforms
+#in-memory cache for TF-IDF transforms
 _transform_cache = {}
 
 def fetch_google_business(name: str, city: str) -> dict:
@@ -47,39 +47,43 @@ def fetch_google_business(name: str, city: str) -> dict:
         "key": GOOGLE_PLACES_API_KEY,
     }
 
-    response = session.get(url, params=params)  # CHANGED to use session
+    response = session.get(url, params=params)  #  use session
     results = response.json().get("results", [])
     return results[0] if results else None
 
-def fetch_similar_google_places(city: str, category_keywords: str, max_pages: int = 3):
-  #Fetch up to max_pages * 20 results via textsearch + proper pagination.
-  url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-  # initial query params (only the first time)
-  params = {
-      "query": f"{category_keywords} in {city}",
-      "key": GOOGLE_PLACES_API_KEY,
-      "fields": "name,geometry,types,rating,place_id,formatted_address,photos"
-  }
-  all_results = []
-  token = None
+def fetch_similar_google_places(city: str, keyword: str, max_pages: int = 3):
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {
+        "query": f"{keyword} in {city}",
+        "key": GOOGLE_PLACES_API_KEY,
+        "fields": "name,geometry,types,rating,place_id,formatted_address,photos"
+    }
+    all_results = []
+    token = None
 
-  for page in range(max_pages):
-      # if we have a token (2nd+ page), switch to pagetoken params
-      if page > 0:
-          # Google requires a short wait before next_page_token becomes valid
-          time.sleep(2)
-          params = {"pagetoken": token, "key": GOOGLE_PLACES_API_KEY}
+    for page in range(max_pages):
+        if page == 0:
+            resp = session.get(url, params=params).json()
+        else:
+            # poll until the next_page_token is active
+            for _ in range(5):
+                poll = session.get(url, params={
+                    "pagetoken": token,
+                    "key": GOOGLE_PLACES_API_KEY
+                }).json()
+                if poll.get("results"):
+                    resp = poll
+                    break
+                time.sleep(0.5)
+            else:
+                break  # bail if token never activates
 
-      resp = session.get(url, params=params).json()
-      results = resp.get("results", [])
-      all_results.extend(results)
+        all_results.extend(resp.get("results", []))
+        token = resp.get("next_page_token")
+        if not token:
+            break
 
-      token = resp.get("next_page_token")
-      # stop early if no more pages
-      if not token:
-          break
-
-  return all_results
+    return all_results
 
 def build_google_tag(business: dict) -> str:
     name = business.get("name", "")
@@ -96,10 +100,10 @@ def haversine_distance(lat1, lon1, lat2, lon2):
   a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
   return R * 2 * asin(sqrt(a))
 
-@lru_cache(maxsize=256)  # ADDED caching geocode
+@lru_cache(maxsize=256)  # caching geocode
 def get_city_from_coordinates(lattitude: float, longitude: float) -> str:
   url = "https://maps.googleapis.com/maps/api/geocode/json"
-  response = session.get(url, params={  # CHANGED to use session
+  response = session.get(url, params={  # to use session
       "latlng": f"{lattitude},{longitude}",
       "key": GOOGLE_PLACES_API_KEY,
   })
@@ -115,7 +119,7 @@ def get_city_from_coordinates(lattitude: float, longitude: float) -> str:
 def fetch_location_and_mood_from_flask():
   url = "http://localhost:5555/locationmood"
   try:
-    response = session.post(url, json={})  # CHANGED to use session
+    response = session.post(url, json={})  # to use session
     if response.status_code == 200:
       data = response.json()
       print(data)
@@ -144,7 +148,7 @@ def get_recommendations(user_mood: str = None, latitude: float = None, longitude
     city = get_city_from_coordinates(latitude, longitude)
     mood_types = mood_type_map.get(user_mood.lower())
 
-    # ADDED: parallel fetch per category
+    # parallel fetch per category
     all_businesses = []
     with ThreadPoolExecutor(max_workers=min(10, len(mood_types))) as ex:
         futures = [ex.submit(fetch_similar_google_places, city, pt, 3) for pt in mood_types]
@@ -154,7 +158,7 @@ def get_recommendations(user_mood: str = None, latitude: float = None, longitude
     # tag and vectorize the nearby businesses'''
     tagged = []
     for business in all_businesses:
-        # ADDED: skip any place without photos
+        # skip any place without photos
         if not business.get("photos"):
             continue
         rating = business.get("rating", 0)
@@ -166,77 +170,80 @@ def get_recommendations(user_mood: str = None, latitude: float = None, longitude
         return JSONResponse(status_code=200, content={"recommendations": []})
 
     tags = [tag for _, tag in tagged]
-    # ADDED: cache TF-IDF transforms
-    tag_vectors = []
-    for t in tags:
-        vec = _transform_cache.get(t)
-        if vec is None:
-            vec = cv.transform([t]).toarray()[0]
-            _transform_cache[t] = vec
-        tag_vectors.append(vec)
-    tag_vectors = np.array(tag_vectors)
+    # identify only the new tags to transform
+    new_tags = [t for t in tags if t not in _transform_cache]
+    if new_tags:
+        # batch-transform
+        new_vectors = cv.transform(new_tags).toarray()
+        for t, v in zip(new_tags, new_vectors):
+            _transform_cache[t] = v
 
-    # generate fake base vvector for similarity since we won't sort by it primarily
-    dummy_vector = np.zeros_like(tag_vectors[0])
-    scores = cosine_similarity([dummy_vector], tag_vectors)[0]
+    # assemble tag_vectors from cache
+    tag_vectors = np.stack([_transform_cache[t] for t in tags])
+
+    # generate similarity against a zero‐vector
+    scores = cosine_similarity(np.zeros((1, tag_vectors.shape[1])), tag_vectors)[0]
 
     combined = []
-    for ((business, tag), sim_score) in zip(tagged, scores):
-      business_lat = business.get("geometry", {}).get("location", {}).get("lat")
-      business_lon = business.get("geometry", {}).get("location", {}).get("lng")
-      if latitude is not None and longitude is not None and business_lat is not None and business_lon:
-        distance_miles = haversine_distance(latitude, longitude, business_lat, business_lon) * 0.621371
-      else:
-        distance_miles = float('inf')  # deprioritize if no location data
+    with ThreadPoolExecutor() as dist_ex:
+        dist_futs = []
+        for (business, _), sim_score in zip(tagged, scores):
+            loc = business.get("geometry", {}).get("location", {})
+            if "lat" in loc and "lng" in loc:
+                dist_futs.append(
+                    dist_ex.submit(
+                        lambda b, s: (b, s,
+                          haversine_distance(latitude, longitude,
+                            b["geometry"]["location"]["lat"],
+                            b["geometry"]["location"]["lng"]) * 0.621371),
+                        business,
+                        sim_score
+                    )
+                )
+        for fut in as_completed(dist_futs):
+            combined.append(fut.result())
 
-      combined.append((business, sim_score, distance_miles))
-    
     # within 30 mile filter
     close_options = [item for item in combined if item[2] <= 30]
-
-    # choose one randomly from the top N cloesest, for ex top 5
     close_options.sort(key=lambda x: x[2])
 
-    # ensures we don't have duplicates in the address
-    seen_addresses = set()
+    # ensure unique addresses
+    seen = set()
     unique_nearby = []
     for business, sim_score, distance_miles in close_options:
-      address = business.get("formatted_address")
-      if address and address not in seen_addresses:
-          seen_addresses.add(address)
-          unique_nearby.append((business, sim_score, distance_miles))
-    
+        addr = business.get("formatted_address")
+        if addr and addr not in seen:
+            seen.add(addr)
+            unique_nearby.append((business, sim_score, distance_miles))
+
     top_nearby = unique_nearby[:60]
 
     recommendations = []
-    for (business, sim_score, distance_miles) in top_nearby:
-      # set photo_url to none
-      photo_url = None
-      
-
-      if "photos" in business and business["photos"]:
-        photo_reference = business["photos"][0].get("photo_reference")
-        if photo_reference:
-          photo_url = (
-              f"https://maps.googleapis.com/maps/api/place/photo"
-                f"?maxwidth=400&photoreference={photo_reference}&key={GOOGLE_PLACES_API_KEY}"
-          )
+    for business, sim_score, distance_miles in top_nearby:
+        photo_url = None
+        photos = business.get("photos", [])
+        if photos:
+            ref = photos[0].get("photo_reference")
+            if ref:
+                photo_url = (
+                    f"https://maps.googleapis.com/maps/api/place/photo"
+                    f"?maxwidth=400&photoreference={ref}&key={GOOGLE_PLACES_API_KEY}"
+                )
 
         full_address = business.get("formatted_address", "")
         city = get_city_from_address(full_address)
         maps_url = f"https://www.google.com/maps/place/?q=place_id:{business.get('place_id')}"
 
-
         recommendations.append({
             "name": business.get("name"),
             "rating": business.get("rating"),
-            "address": business.get("formatted_address"),
+            "address": full_address,
             "categories": ", ".join(business.get("types", [])),
             "distance_miles": round(distance_miles, 2),
             "image": photo_url,
             "city": city,
             "maps_url": maps_url,
-            #"score": round(score, 3)
         })
+
     print(f"[callmodel] Generated {len(recommendations)} recommendations")
     return {"recommendations": recommendations}
