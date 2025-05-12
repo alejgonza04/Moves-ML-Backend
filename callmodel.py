@@ -3,8 +3,8 @@ import os
 import time 
 import joblib
 import requests
-from functools import lru_cache                             # ADDED
-from concurrent.futures import ThreadPoolExecutor, as_completed  # ADDED
+from functools import lru_cache                            
+from concurrent.futures import ThreadPoolExecutor, as_completed 
 from fastapi.responses import JSONResponse
 from sklearn.metrics.pairwise import cosine_similarity
 from math import radians, cos, sin, asin, sqrt
@@ -13,23 +13,24 @@ from dotenv import load_dotenv
 load_dotenv()
 GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
 
-# ADDED: reuse HTTP connections for keep-alive
+# reuse HTTP connections for keep-alive
 session = requests.Session()
 
 shopping_types = [
-  "clothing_store", "shoe_store",
-  "jewelry_store", "thrift_store", "record_store", "comic_book_store", "farmers_market",
+  "clothing_store",
+  "jewelry_store", "thrift_store", "record_store", "comic_book_store", "vintage store", "local boutique", "indie store",
 ]
 
 mood_type_map = {
     "shopping": shopping_types,
-    "coffee" : ["cafe", "bakery",],
-    "party" : ["night_club", "bar", "pub", "brewery",],
-    "food": ["restaurant",],
-    "workout" : ["gym",],
-    "adventure": ["amusement_park", "aquarium", "zoo", "park", "tourist_attraction", "campground", ],
-    "artsy": ["art_gallery", "museum", "movie_theater", ],
-    "study": ["library", "university", "book_store", ]
+    "coffee" : ["cafe", "bakery", "coffee roastery","art cafe",],
+    "party" : ["night_club", "bar", "karaoke", "rooftop bar", "speakeasy", "dive bar"],
+    "food": ["restaurant", "food truck",],
+    "workout" : ["gym", "fitness center", "crossfit", "yoga studio", "martial arts",],
+    "adventure": ["amusement_park", "aquarium", "zoo", "park", "tourist_attraction", 
+    "campground", "hiking", "kayaking", "boat tour", "rock climbing",],
+    "artsy": ["art_gallery", "museum", "movie_theater", "indie theater", "community gallery", "street art", "ceramics studio", "art class"],
+    "study": ["library", "book_store", "co-working space", "university library", "quiet cafe", "study cafe",]
 }
 
 _, cv, _ = joblib.load(os.path.join(os.path.dirname(__file__), "recommender_model.joblib"))
@@ -87,7 +88,10 @@ def fetch_similar_google_places(city: str, keyword: str, max_pages: int = 3):
 
 def build_google_tag(business: dict) -> str:
     name = business.get("name", "")
-    city = business.get("formatted_address", "").split(",")[-3].strip() if ","  in business.get("formatted_address", "") else ""
+    address = business.get("formatted_address", "")
+    parts = address.split(",")
+    city = parts[-3].strip() if len(parts) >= 3 else ""
+    #city = business.get("formatted_address", "").split(",")[-3].strip() if ","  in business.get("formatted_address", "") else ""
     categories = " ".join(business.get("types", []))
     return f"{name} {categories} {city}"
 
@@ -204,7 +208,7 @@ def get_recommendations(user_mood: str = None, latitude: float = None, longitude
             combined.append(fut.result())
 
     # within 30 mile filter
-    close_options = [item for item in combined if item[2] <= 30]
+    close_options = [item for item in combined if item[2] <= 50]
     close_options.sort(key=lambda x: x[2])
 
     # ensure unique addresses
