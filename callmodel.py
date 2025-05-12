@@ -25,7 +25,7 @@ mood_type_map = {
     "shopping": shopping_types,
     "coffee" : ["cafe", "bakery", "coffee roastery","art cafe",],
     "party" : ["night_club", "bar", "karaoke", "rooftop bar", "speakeasy", "dive bar"],
-    "food": ["restaurant", "food truck",],
+    "food": ["restaurant", ],
     "workout" : ["gym", "fitness center", "crossfit", "yoga studio", "martial arts",],
     "adventure": ["amusement_park", "aquarium", "zoo", "park", "tourist_attraction", 
     "campground", "hiking", "kayaking", "boat tour", "rock climbing",],
